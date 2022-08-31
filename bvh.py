@@ -1,8 +1,8 @@
+from functools import lru_cache
+from typing import Tuple
 import numpy as np
 import re
 from transforms3d.euler import euler2mat, mat2euler
-
-
 class BvhJoint:
     def __init__(self, name, parent):
         self.name = name
@@ -17,9 +17,11 @@ class BvhJoint:
     def __repr__(self):
         return self.name
 
+    @lru_cache(maxsize=1)
     def position_animated(self):
         return any([x.endswith('position') for x in self.channels])
 
+    @lru_cache(maxsize=1)
     def rotation_animated(self):
         return any([x.endswith('rotation') for x in self.channels])
 
@@ -27,8 +29,8 @@ class BvhJoint:
 class Bvh:
     def __init__(self):
         self.joints = {}
-        self.root = None
-        self.keyframes = None
+        self.root:BvhJoint= None
+        self.keyframes: np.ndarray= None
         self.frames = 0
         self.fps = 0
 
@@ -115,7 +117,7 @@ class Bvh:
         self._parse_hierarchy(hierarchy)
         self.parse_motion(motion)
 
-    def _extract_rotation(self, frame_pose, index_offset, joint):
+    def _extract_rotation(self, joint:BvhJoint, frame_pose:np.ndarray, index_offset:int):
         local_rotation = np.zeros(3)
         for channel in joint.channels:
             if channel.endswith("position"):
@@ -150,7 +152,7 @@ class Bvh:
 
         return M_rotation, index_offset
 
-    def _extract_position(self, joint, frame_pose, index_offset):
+    def _extract_position(self, joint:BvhJoint, frame_pose:np.ndarray, index_offset:int):
         offset_position = np.zeros(3)
         for channel in joint.channels:
             if channel.endswith("rotation"):
@@ -167,7 +169,7 @@ class Bvh:
 
         return offset_position, index_offset
 
-    def _recursive_apply_frame(self, joint, frame_pose, index_offset, p, r, M_parent, p_parent):
+    def _recursive_apply_frame(self, joint:BvhJoint, frame_pose:np.ndarray, index_offset:int, p, r, M_parent, p_parent):
         if joint.position_animated():
             offset_position, index_offset = self._extract_position(joint, frame_pose, index_offset)
         else:
@@ -180,7 +182,7 @@ class Bvh:
             return index_offset
 
         if joint.rotation_animated():
-            M_rotation, index_offset = self._extract_rotation(frame_pose, index_offset, joint)
+            M_rotation, index_offset = self._extract_rotation(joint, frame_pose, index_offset)
         else:
             M_rotation = np.eye(3)
 
@@ -197,19 +199,26 @@ class Bvh:
 
         return index_offset
 
-    def frame_pose(self, frame):
+    def frame_pose(self, frame:int) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        params:
+            frame : frame index 
+        return:
+            p, r : global position and global rotation
+        """
         p = np.empty((len(self.joints), 3))
         r = np.empty((len(self.joints), 3))
         frame_pose = self.keyframes[frame]
-        M_parent = np.zeros((3, 3))
-        M_parent[0, 0] = 1
-        M_parent[1, 1] = 1
-        M_parent[2, 2] = 1
+        M_parent = np.eye(3)
         self._recursive_apply_frame(self.root, frame_pose, 0, p, r, M_parent, np.zeros(3))
 
         return p, r
 
     def all_frame_poses(self):
+        """
+        return:
+            p, r : global position and global rotation with shape (frames, joints, 3)
+        """
         p = np.empty((self.frames, len(self.joints), 3))
         r = np.empty((self.frames, len(self.joints), 3))
 
@@ -237,7 +246,7 @@ class Bvh:
 
     def plot_frame(self, frame, fig=None, ax=None):
         p, r = self.frame_pose(frame)
-        self._plot_pose(p, r, fig, ax)
+        self._plot_pose(p*0.1, r, fig, ax)
 
     def joint_names(self):
         return self.joints.keys()
@@ -247,12 +256,8 @@ class Bvh:
             self.parse_string(f.read())
 
     def plot_all_frames(self):
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import axes3d, Axes3D
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
         for i in range(self.frames):
-            self.plot_frame(i, fig, ax)
+            self.plot_frame(i)
 
     def __repr__(self):
         return f"BVH {len(self.joints.keys())} joints, {self.frames} frames"
@@ -262,7 +267,7 @@ if __name__ == '__main__':
     # create Bvh parser
     anim = Bvh()
     # parser file
-    anim.parse_file("example.bvh")
+    anim.parse_file("0071@000.bvh")
 
     # draw the skeleton in T-pose
     anim.plot_hierarchy()
